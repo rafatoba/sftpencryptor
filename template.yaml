@@ -1,0 +1,82 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: SFTP Encryptor serverless stack
+
+Globals:
+  Function:
+    Runtime: java8
+    MemorySize: 512
+    Timeout: 30
+  Api:
+    OpenApiVersion: '3.0.1'
+
+Resources:
+
+  UnencryptedFilesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-${AWS::AccountId}-${AWS::Region}-unencrypted
+
+  EncryptedFilesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-${AWS::AccountId}-${AWS::Region}-encrypted
+   
+  EncryptFilesLambda:
+   Type: AWS::Serverless::Function
+   Properties:
+      CodeUri: pgp-file-encrypt-stage/target/lambda.zip
+      Handler: com.rafasoft.api.handlers.PGPS3FileLambda::handler
+      Environment:
+        Variables:
+            ENCRYPTED_FILES_BUCKET_NAME: !Sub ${AWS::StackName}-${AWS::AccountId}-${AWS::Region}-encrypted
+            PARTNER_PUBLIC_KEY_LOCATION: /sftpencryptor/prod/pgpkeys/partner/public
+            MY_PRIVATE_KEY_LOCATION: /sftpencryptor/prod/pgpkeys/mykey/private
+            MY_PASSPHRASE_LOCATION: /sftpencryptor/prod/pgpkeys/mykey/private/passphrase
+      Policies: 
+      - S3ReadPolicy:
+         BucketName:  !Sub ${AWS::StackName}-${AWS::AccountId}-${AWS::Region}-unencrypted
+      - S3WritePolicy:
+         BucketName:  !Sub ${AWS::StackName}-${AWS::AccountId}-${AWS::Region}-encrypted
+      - SSMParameterReadPolicy:
+          ParameterName: sftpencryptor/prod/pgpkeys/partner/public
+      - SSMParameterReadPolicy:
+          ParameterName: sftpencryptor/prod/pgpkeys/mykey/private
+      - SSMParameterReadPolicy:
+          ParameterName: sftpencryptor/prod/pgpkeys/mykey/private/passphrase
+      Events: 
+        S3Events:
+          Type: S3
+          Properties:
+            Bucket: !Ref UnencryptedFilesBucket
+            Events: s3:ObjectCreated:*    
+
+  SFTPUploadFilesLambda:
+   Type: AWS::Serverless::Function
+   Properties:
+      CodeUri: sftp-file-upload-stage/target/lambda.zip
+      Handler: com.rafasoft.uploader.handler.SFTPUploadLambda::handler
+      Environment:
+        Variables:
+            SFTP_HOST: /sftpencryptor/prod/sftpconfig/host
+            SFTP_PORT: /sftpencryptor/prod/sftpconfig/port
+            SFTP_USERNAME: /sftpencryptor/prod/sftpconfig/username
+            SFTP_PASSWORD: /sftpencryptor/prod/sftpconfig/password
+      Policies: 
+      - S3ReadPolicy:
+         BucketName:  !Sub ${AWS::StackName}-${AWS::AccountId}-${AWS::Region}-encrypted
+      - SSMParameterReadPolicy:
+          ParameterName: sftpencryptor/prod/sftpconfig/host
+      - SSMParameterReadPolicy:
+          ParameterName: sftpencryptor/prod/sftpconfig/port
+      - SSMParameterReadPolicy:
+          ParameterName: sftpencryptor/prod/sftpconfig/username
+      - SSMParameterReadPolicy:
+          ParameterName: sftpencryptor/prod/sftpconfig/password
+      Events: 
+        S3Events:
+          Type: S3
+          Properties:
+            Bucket: !Ref EncryptedFilesBucket
+            Events: s3:ObjectCreated:*    
+
